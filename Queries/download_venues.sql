@@ -1,0 +1,3 @@
+SELECT DISTINCT venue AS venue
+FROM papers
+WHERE venue IS NOT NULL;
