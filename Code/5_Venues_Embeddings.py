@@ -3,7 +3,7 @@ import psycopg2
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
-# --- Config ---
+
 DB_CONFIG = {
     'dbname': 'AMINER_V14',
     'user': 'postgres',
@@ -15,14 +15,14 @@ DB_CONFIG = {
 MODEL_NAME = "thenlper/gte-small"
 OUTPUT_PATH = "C:/Users/effik/Desktop/THESIS/test_postgre/Data/canonical_venue_embeddings.json"
 
-# --- Load embedder ---
+#Embedder
 embedder = SentenceTransformer(MODEL_NAME)
 
-# --- Connect to DB ---
+#Connect to DB
 conn = psycopg2.connect(**DB_CONFIG)
 cur = conn.cursor()
 
-# --- Fetch distinct normalized venue names ---
+#Fetch distinct normalized venue names
 cur.execute("""
     SELECT DISTINCT LOWER(TRIM(normalized_venue))
     FROM venues_norm
@@ -32,7 +32,7 @@ venues = [row[0] for row in cur.fetchall()]
 print(f"Fetched {len(venues)} distinct canonical venue names from venues_norm.")
 
 
-# --- Embed each venue ---
+#Embed each venue
 canonical_venues = []
 batch_size = 256
 
@@ -45,11 +45,11 @@ for i in range(0, len(venues), batch_size):
             "embedding": vec.tolist()
         })
 
-# --- Save to JSON ---
+
 with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
     json.dump(canonical_venues, f, indent=2, ensure_ascii=False)
 
-# --- Cleanup ---
+
 cur.close()
 conn.close()
 

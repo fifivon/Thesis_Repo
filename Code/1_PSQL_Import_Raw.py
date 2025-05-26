@@ -3,7 +3,6 @@ import psycopg2
 from psycopg2.extras import execute_values
 import ijson
 
-# --- Configuration ---
 json_path = r"C:/Users/effik/Downloads/dblp_v14/dblp_v14.json"
 db_config = {
     'dbname': 'AMINER_V14',
@@ -98,14 +97,14 @@ def insert_to_postgres(data, config):
     conn.commit()
     cursor.close()
     conn.close()
-    print(f"Inserted {len(values)} records into PostgreSQL.")
+    print(f"Inserted {len(values)} records.")
 
 if __name__ == "__main__":
     total_inserted = 0
-    print("Loading, cleaning and inserting in batches...")
+    print("Cleaning and inserting in batches...")
     for i, batch in enumerate(load_and_clean_data(json_path, batch_size=10000), start=1):
         print(f"Inserting batch {i} with {len(batch)} records...")
         insert_to_postgres(batch, db_config)
         total_inserted += len(batch)
 
-    print(f"Done. Total records inserted: {total_inserted}")
+    print(f"Total records inserted: {total_inserted}")

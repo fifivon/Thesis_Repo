@@ -5,7 +5,7 @@ import ijson
 from tqdm import tqdm
 import torch
 
-# --- Config ---
+
 JSON_PATH = r"C:/Users/effik/Downloads/dblp_v14/dblp_v14.json"
 DB_CONFIG = {
     'dbname': 'AMINER_V14',
@@ -14,10 +14,10 @@ DB_CONFIG = {
     'host': 'localhost',
     'port': '5433'
 }
-MODEL_NAME = "thenlper/gte-small"  # ⚡ Faster model
-BATCH_SIZE = 64  # Adjust if needed based on GPU memory
+MODEL_NAME = "thenlper/gte-small"
+BATCH_SIZE = 64
 
-# --- Load model with CUDA if available ---
+#Load model with CUDA
 print("Loading model...")
 model = SentenceTransformer(MODEL_NAME)
 if torch.cuda.is_available():
@@ -26,7 +26,7 @@ if torch.cuda.is_available():
 else:
     print("CUDA not available. Using CPU.")
 
-# --- Load paper info from DB ---
+# Paper info from DB
 def load_paper_data_from_db():
     conn = psycopg2.connect(**DB_CONFIG)
     cursor = conn.cursor()
@@ -40,7 +40,7 @@ def load_paper_data_from_db():
     print(f"Loaded {len(rows)} papers from DB.")
     return {pid: (title, keywords) for pid, title, keywords in rows}
 
-# --- Stream abstracts from JSON file ---
+#Stream abstracts from JSON file
 def merge_with_abstracts(json_path, db_papers):
     with open(json_path, 'r', encoding='utf-8') as f:
         papers = ijson.items(f, 'item')
@@ -55,7 +55,7 @@ def merge_with_abstracts(json_path, db_papers):
             except Exception as e:
                 print(f"Error processing paper: {e}")
 
-# --- Process a batch of papers ---
+#Process a batch of papers
 def process_batch(batch):
     pids, titles, abstracts, keywords = zip(*batch)
     kw_strings = [" ".join(kws) if kws else "" for kws in keywords]
@@ -72,7 +72,7 @@ def process_batch(batch):
             f"[{','.join(map(str, k_emb))}]"
         )
 
-# --- Generate embeddings in batches ---
+#Generate embeddings in batches
 def generate_embeddings_batched(paper_generator, batch_size=BATCH_SIZE):
     batch = []
     for paper in tqdm(paper_generator, desc="Generating embeddings", unit="paper"):
@@ -83,7 +83,7 @@ def generate_embeddings_batched(paper_generator, batch_size=BATCH_SIZE):
     if batch:
         yield from process_batch(batch)
 
-# --- Insert into DB in batches ---
+#Insert into DB in batches
 def insert_embeddings_in_batches(data_gen, batch_size=2000):
     conn = psycopg2.connect(**DB_CONFIG)
     cursor = conn.cursor()
@@ -110,7 +110,7 @@ def insert_embeddings_in_batches(data_gen, batch_size=2000):
     cursor.close()
     conn.close()
 
-# --- Main ---
+
 if __name__ == "__main__":
     print("Loading paper metadata from DB...")
     db_papers = load_paper_data_from_db()

@@ -14,40 +14,52 @@ DB_CONFIG = {
 
 JSON_PATH = "C:/Users/effik/Downloads/dblp_v14/dblp_v14.json"
 OUTPUT_FOLDER = "C:/Users/effik/Desktop/THESIS/test_postgre/Data"
-NUM_SETS = 5
-SET_SIZE = 500
+NUM_SETS = 10
+SET_SIZE = 100
 
-# --- Step 1: Load DB Data Once ---
+#Load DB Data
 print("Connecting to database...")
 conn = psycopg2.connect(**DB_CONFIG)
 cur = conn.cursor()
 
-print(f"Fetching {NUM_SETS} × {SET_SIZE} random paper entries from DB...")
-
+used_paper_ids = set()
 all_sets = []
+
+print(f"Fetching {NUM_SETS} × {SET_SIZE} unique papers from DB...")
+
 for set_idx in range(NUM_SETS):
-    cur.execute("""
-        SELECT p.id, COALESCE(vn.normalized_venue, p.venue) AS final_venue
-        FROM papers p
-        LEFT JOIN venues_norm vn ON p.venue = vn.raw_venue
-        WHERE p.venue IS NOT NULL
-        ORDER BY random()
-        LIMIT %s;
-    """, (SET_SIZE,))
-    rows = cur.fetchall()
-    paper_map = {row[0]: row[1] for row in rows}
+    paper_map = {}
+    attempts = 0
+    while len(paper_map) < SET_SIZE and attempts < 50:
+        cur.execute("""
+            SELECT p.id, COALESCE(vn.normalized_venue, p.venue) AS final_venue
+            FROM papers p
+            LEFT JOIN venues_norm vn ON p.venue = vn.raw_venue
+            WHERE p.venue IS NOT NULL
+            ORDER BY random()
+            LIMIT %s;
+        """, (SET_SIZE * 2,))
+        rows = cur.fetchall()
+
+        for paper_id, venue in rows:
+            if paper_id not in used_paper_ids and venue and paper_id not in paper_map:
+                paper_map[paper_id] = venue
+                used_paper_ids.add(paper_id)
+                if len(paper_map) >= SET_SIZE:
+                    break
+
+        attempts += 1
+
     all_sets.append(paper_map)
 
 conn.close()
 
-# --- Step 2: Stream JSON and Extract Abstracts for All IDs ---
+#Stream JSON and Extract Abstracts
 print("\nStreaming JSON to match abstracts...")
 
-all_needed_ids = set()
-for s in all_sets:
-    all_needed_ids.update(s.keys())
-
+all_needed_ids = set(pid for s in all_sets for pid in s)
 paper_abstract_map = {}
+
 with open(JSON_PATH, "r", encoding="utf-8") as f:
     parser = ijson.items(f, "item")
     for paper in parser:
@@ -59,7 +71,7 @@ with open(JSON_PATH, "r", encoding="utf-8") as f:
         if len(paper_abstract_map) >= len(all_needed_ids):
             break
 
-# --- Step 3: Write Each Set Separately ---
+#Save Evaluation Sets
 for i, paper_map in enumerate(all_sets, start=1):
     evaluation_set = []
     missing = 0

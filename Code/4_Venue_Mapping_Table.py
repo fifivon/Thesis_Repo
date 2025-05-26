@@ -10,7 +10,6 @@ conn = psycopg2.connect(
 )
 cur = conn.cursor()
 
-# Optional: clear previous test data
 cur.execute("DELETE FROM venues_norm;")
 
 # Insert mapping

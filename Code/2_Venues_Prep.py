@@ -4,23 +4,22 @@ import html
 from rapidfuzz import fuzz
 from tqdm import tqdm
 
-# === CONFIG ===
-INPUT_CSV = r"C:/Users/effik/Desktop/THESIS/test_postgre/Data/venues.csv"                # Input: raw venue list from DB
-MAPPING_CSV = r"C:/Users/effik/Desktop/THESIS/test_postgre/Data/venue_mapping.csv"       # Output: raw → normalized
-SIMILARITY_THRESHOLD = 93               # Fuzzy match threshold
+INPUT_CSV = r"C:/Users/effik/Desktop/THESIS/test_postgre/Data/venues.csv"   # Input: raw venue list from DB
+MAPPING_CSV = r"C:/Users/effik/Desktop/THESIS/test_postgre/Data/venue_mapping.csv"   # Output: raw → normalized
+SIMILARITY_THRESHOLD = 93  # Fuzzy match threshold
 
-# === Bad Venue Terms ===
+# Bad Venue Terms
 BAD_VENUE_TERMS = {
     "", "-", "unknown", "null", "none", "test", "...", "n/a", "na", "unpublished", "zzz"
 }
 
-# === Normalization Function (no acronym fixes) ===
+# Normalization Function (without acronym fixes)
 def normalize_venue_name(name: str) -> str:
     if not name:
         return ""
 
-    name = html.unescape(name)                         # Decode HTML entities
-    name = name.encode("ascii", "ignore").decode()     # Remove accents
+    name = html.unescape(name)  # Decode HTML entities
+    name = name.encode("ascii", "ignore").decode()  # Remove accents
     name = name.lower().strip()
 
     # Remove year patterns like 2022 or 1998
@@ -55,7 +54,7 @@ def normalize_venue_name(name: str) -> str:
 
     return name
 
-# === MAIN LOGIC ===
+#MAIN LOGIC
 seen_normalized = []
 mapping = []
 skipped = 0
@@ -82,7 +81,7 @@ for raw_venue in tqdm(raw_venues, desc="Fuzzy matching"):
         seen_normalized.append(norm)
         mapping.append((raw_venue, norm))
 
-# === SAVE TO CSV ===
+
 with open(MAPPING_CSV, "w", newline='', encoding="utf-8") as outfile:
     writer = csv.writer(outfile)
     writer.writerow(["raw_venue", "normalized_venue"])

@@ -5,7 +5,7 @@ import psycopg2
 from tqdm import tqdm
 import ijson
 
-# --- Config ---
+
 MODEL_DIM = 384
 FAISS_INDEX_PATH = "C:/Users/effik/Desktop/THESIS/test_postgre/Data/faiss_index.index"
 METADATA_PATH = "C:/Users/effik/Desktop/THESIS/test_postgre/Data/metadata.json"
@@ -23,7 +23,7 @@ print("Indexing abstracts from original JSON (streaming)...")
 abstract_lookup = {}
 
 with open(ABSTRACT_JSON_PATH, "r", encoding="utf-8") as f:
-    parser = ijson.items(f, "item")  # assumes JSON is a list: [ {...}, {...}, ... ]
+    parser = ijson.items(f, "item")
     for paper in tqdm(parser, desc="Streaming abstracts"):
         paper_id = paper.get("id")
         abstract = paper.get("abstract")
@@ -33,7 +33,7 @@ with open(ABSTRACT_JSON_PATH, "r", encoding="utf-8") as f:
 
 print(f"Loaded {len(abstract_lookup)} abstracts.")
 
-# --- Step 2: Connect to DB and retrieve embeddings ---
+#Connect to DB and retrieve embeddings
 print("🔌 Connecting to PostgreSQL...")
 conn = psycopg2.connect(**DB_CONFIG)
 cur = conn.cursor()
@@ -68,7 +68,7 @@ with tqdm(total=total_rows, desc="Processing Papers") as pbar:
 
         if vec.shape[0] != MODEL_DIM:
             pbar.update(1)
-            continue  # Skip corrupted
+            continue  #Skip corrupted
 
         abstract = abstract_lookup.get(paper_id)  # May be None
         if abstract is None:
@@ -86,12 +86,12 @@ with tqdm(total=total_rows, desc="Processing Papers") as pbar:
 
         pbar.update(1)
 
-# --- Step 3: Build FAISS index ---
+#Build FAISS index
 print("Building FAISS index...")
 faiss_index = faiss.IndexFlatIP(MODEL_DIM)
 faiss_index.add(np.array(embeddings))
 
-# --- Step 4: Save outputs ---
+
 faiss.write_index(faiss_index, FAISS_INDEX_PATH)
 with open(METADATA_PATH, "w", encoding="utf-8") as f:
     json.dump(metadata, f, indent=2)

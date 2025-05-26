@@ -3,22 +3,25 @@ import json
 import faiss
 import numpy as np
 import pandas as pd
+import concurrent.futures
 from sentence_transformers import SentenceTransformer
 from langchain_ollama import OllamaLLM
 from langchain.prompts import PromptTemplate
 from tqdm import tqdm
+from datetime import datetime
 
-# --- Config ---
+
 EVAL_FOLDER = "C:/Users/effik/Desktop/THESIS/test_postgre/Data"
 FAISS_INDEX_PATH = "C:/Users/effik/Desktop/THESIS/test_postgre/Data/faiss_index.index"
 METADATA_PATH = "C:/Users/effik/Desktop/THESIS/test_postgre/Data/metadata.json"
 CANONICAL_EMB_PATH = "C:/Users/effik/Desktop/THESIS/test_postgre/Data/canonical_venue_embeddings.json"
-EXCEL_OUTPUT = "C:/Users/effik/Desktop/THESIS/test_postgre/Results/Eval_Res_Rerank_Methods3.xlsx"
+EXCEL_OUTPUT = "C:/Users/effik/Desktop/THESIS/test_postgre/Results/Res_RAG_citations_rerank.xlsx"
 MODEL_NAME = "thenlper/gte-small"
 TOP_K = [3, 5, 7]
 SIM_THRESHOLD = 0.92
+TIMEOUT = 120  # seconds
 
-# --- Load models and data ---
+
 embedder = SentenceTransformer(MODEL_NAME)
 llm = OllamaLLM(model="mistral", temperature=0.0)
 
@@ -33,7 +36,7 @@ canonical_names = [x["name"] for x in canonical_data]
 canonical_embeddings = np.array([x["embedding"] for x in canonical_data], dtype=np.float32)
 canonical_embeddings = canonical_embeddings / np.linalg.norm(canonical_embeddings, axis=1, keepdims=True)
 
-# --- Prompts ---
+#Prompts
 expansion_prompt = PromptTemplate.from_template("""
 You are a smart assistant that converts abbreviated or informal venue names into their standardized full academic names.
 Only respond with the formal name used in academic citations, without any commentary or extra information.
@@ -62,12 +65,29 @@ Format your response as a simple list:
 """)
 
 rag_chain = rag_prompt | llm
+expansion_chain = expansion_prompt | llm
 
-# --- Citation-based reranker ---
+#Timeout-safe LLM call
+def safe_llm_invoke(chain, input_dict, timeout=TIMEOUT, context="unknown"):
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        future = executor.submit(chain.invoke, input_dict)
+        try:
+            print(f"[{datetime.now()}] Calling LLM for: {context}")
+            result = future.result(timeout=timeout)
+            print(f"[{datetime.now()}] LLM returned for: {context}")
+            return result
+        except concurrent.futures.TimeoutError:
+            print(f"[{datetime.now()}] LLM call timed out on: {context}")
+            return None
+        except Exception as e:
+            print(f"[{datetime.now()}] LLM exception on {context}: {e}")
+            return None
+
+#Citation-based reranker
 def rerank_by_citation(candidate_entries, top_k=7):
     return sorted(candidate_entries, key=lambda r: r.get("n_citation", 0), reverse=True)[:top_k]
 
-# --- Venue matcher ---
+#Venue matcher
 def match_venue_to_predictions(venue_name, predictions, threshold):
     venue_vec = embedder.encode(venue_name, normalize_embeddings=True).reshape(1, -1)
     sims = []
@@ -77,16 +97,16 @@ def match_venue_to_predictions(venue_name, predictions, threshold):
         sims.append(sim)
     return sims
 
-# --- Evaluate across sets 1–5 ---
-for set_idx in range(1, 6):
+#Main evaluation loop
+for set_idx in range(8, 11):
     print(f"\n=== Starting Evaluation Set {set_idx} (Citation-Based Reranking) ===")
     eval_path = os.path.join(EVAL_FOLDER, f"evaluation_set{set_idx}.json")
-
     with open(eval_path, "r", encoding="utf-8") as f:
         eval_set = json.load(f)
 
     hit_counts = {k: 0 for k in TOP_K}
     total = 0
+    timeout_count = 0
     reciprocal_ranks = []
     ndcgs = []
     LOG_DISCOUNTS = np.log2(np.arange(2, 9))
@@ -104,11 +124,14 @@ for set_idx in range(1, 6):
             f'- "{r["title"]}" published in {r["venue"] or "Unknown"}' for r in top_7
         )
 
-        try:
-            response = rag_chain.invoke({"abstract": abstract, "similar_papers": context})
-            lines = [line.strip("-• ").strip() for line in response.split("\n") if line.strip()]
-            preds = [line.split("(")[0].strip() if "(" in line else line for line in lines][:max(TOP_K)]
-        except Exception:
+        response = safe_llm_invoke(rag_chain, {"abstract": abstract, "similar_papers": context}, context=f"abstract {idx + 1}")
+        if response is None:
+            timeout_count += 1
+            continue
+
+        lines = [line.strip("-• ").strip() for line in response.split("\n") if line.strip()]
+        preds = [line.split("(")[0].strip() if "(" in line else line for line in lines][:max(TOP_K)]
+        if not preds:
             continue
 
         sims = match_venue_to_predictions(raw_venue, preds, SIM_THRESHOLD)
@@ -124,9 +147,10 @@ for set_idx in range(1, 6):
                 rr = 1 / (i + 1)
 
         if not any(paper_hits.values()):
-            try:
-                expanded = llm.invoke(expansion_prompt.invoke({"venue": raw_venue})).strip()
-                sims = match_venue_to_predictions(expanded, preds, SIM_THRESHOLD)
+            transformed = safe_llm_invoke(expansion_chain, {"venue": raw_venue}, context=f"expansion {idx + 1}")
+            if transformed:
+                transformed = transformed.strip()
+                sims = match_venue_to_predictions(transformed, preds, SIM_THRESHOLD)
                 for i, (pred, sim) in enumerate(zip(preds, sims)):
                     for k in TOP_K:
                         if i < k and not paper_hits[k] and sim >= SIM_THRESHOLD:
@@ -134,8 +158,6 @@ for set_idx in range(1, 6):
                             paper_hits[k] = True
                     if sim >= SIM_THRESHOLD and rr == 0:
                         rr = 1 / (i + 1)
-            except Exception:
-                pass
 
         reciprocal_ranks.append(rr)
 
@@ -146,10 +168,9 @@ for set_idx in range(1, 6):
         idcg = np.sum(np.sort(sims)[::-1] / LOG_DISCOUNTS)
         ndcg = dcg / idcg if idcg > 0 else 0
         ndcgs.append(ndcg)
-
         total += 1
 
-    # --- Save results to Excel ---
+    #Saving results
     summary_df = pd.DataFrame({
         "Top-K": TOP_K,
         "Hits": [hit_counts[k] for k in TOP_K],
@@ -158,12 +179,12 @@ for set_idx in range(1, 6):
     })
 
     extra_metrics_df = pd.DataFrame({
-        "Metric": ["MRR", "Mean nDCG@7"],
-        "Score": [round(np.mean(reciprocal_ranks), 4), round(np.mean(ndcgs), 4)]
+        "Metric": ["MRR", "Mean nDCG@7", "Timeouts"],
+        "Score": [round(np.mean(reciprocal_ranks), 4), round(np.mean(ndcgs), 4), timeout_count]
     })
 
     with pd.ExcelWriter(EXCEL_OUTPUT, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
         summary_df.to_excel(writer, sheet_name=f"Rerank Citations Set {set_idx}", index=False)
         extra_metrics_df.to_excel(writer, sheet_name=f"Rerank Citations Set {set_idx} - Extra", index=False)
 
-    print(f"Finished Evaluation Set {set_idx}")
+    print(f"Finished Evaluation Set {set_idx}. Timeouts: {timeout_count}")
