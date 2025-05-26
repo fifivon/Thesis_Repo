@@ -3,19 +3,21 @@ import json
 import faiss
 import numpy as np
 import pandas as pd
-import concurrent.futures
-from sentence_transformers import SentenceTransformer
-from langchain_ollama import OllamaLLM
-from langchain.prompts import PromptTemplate
+import torch
 from tqdm import tqdm
 from datetime import datetime
+import concurrent.futures
+from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from langchain_ollama import OllamaLLM
+from langchain.prompts import PromptTemplate
 
 
 EVAL_FOLDER = "C:/Users/effik/Desktop/THESIS/test_postgre/Data"
 FAISS_INDEX_PATH = "C:/Users/effik/Desktop/THESIS/test_postgre/Data/faiss_index.index"
 METADATA_PATH = "C:/Users/effik/Desktop/THESIS/test_postgre/Data/metadata.json"
 CANONICAL_EMB_PATH = "C:/Users/effik/Desktop/THESIS/test_postgre/Data/canonical_venue_embeddings.json"
-EXCEL_OUTPUT = "C:/Users/effik/Desktop/THESIS/test_postgre/Results/Res_RAG_no_rerank.xlsx"
+EXCEL_OUTPUT = "C:/Users/effik/Desktop/THESIS/test_postgre/Results/Res_RAG_cross_enc_rerank.xlsx"
 MODEL_NAME = "thenlper/gte-small"
 TOP_K = [3, 5, 7]
 SIM_THRESHOLD = 0.92
@@ -24,6 +26,8 @@ TIMEOUT = 120
 
 embedder = SentenceTransformer(MODEL_NAME)
 llm = OllamaLLM(model="mistral", temperature=0.0)
+tokenizer = AutoTokenizer.from_pretrained("cross-encoder/ms-marco-MiniLM-L-6-v2")
+cross_encoder = AutoModelForSequenceClassification.from_pretrained("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 print("Loading FAISS index and metadata...")
 index = faiss.read_index(FAISS_INDEX_PATH)
@@ -32,7 +36,7 @@ with open(METADATA_PATH, "r", encoding="utf-8") as f:
 with open(CANONICAL_EMB_PATH, "r", encoding="utf-8") as f:
     canonical_data = json.load(f)
 
-#Normalize canonical embeddings
+#Canonical embeddings
 canonical_names = [x["name"] for x in canonical_data]
 canonical_embeddings = np.array([x["embedding"] for x in canonical_data], dtype=np.float32)
 canonical_embeddings = canonical_embeddings / np.linalg.norm(canonical_embeddings, axis=1, keepdims=True)
@@ -84,7 +88,17 @@ def safe_llm_invoke(chain, input_dict, timeout=TIMEOUT, context="unknown"):
             print(f"[{datetime.now()}] LLM exception on {context}: {e}")
             return None
 
-#Venue matcher
+#Rerank with Cross Encoder
+def rerank_with_cross_encoder(query: str, candidate_entries: list, top_k: int = 7):
+    pairs = [(query, entry["abstract"]) for entry in candidate_entries if entry.get("abstract")]
+    encodings = tokenizer(pairs, padding=True, truncation=True, return_tensors="pt")
+    with torch.no_grad():
+        logits = cross_encoder(**encodings).logits
+        scores = logits.squeeze().tolist()
+    ranked = [candidate_entries[i] for i in np.argsort(scores)[::-1]]
+    return ranked[:top_k]
+
+#Similarity matching
 def match_venue_to_predictions(venue_name, predictions, threshold):
     venue_vec = embedder.encode(venue_name, normalize_embeddings=True).reshape(1, -1)
     sims = []
@@ -94,10 +108,11 @@ def match_venue_to_predictions(venue_name, predictions, threshold):
         sims.append(sim)
     return sims
 
-#Evaluate sets
-for set_idx in range(9, 11):
-    print(f"\n=== Starting Evaluation Set {set_idx} (No Reranking) ===")
+#Main loop
+for set_idx in range(8, 11):
+    print(f"\nStarting Evaluation Set {set_idx} (Cross-Encoder Reranking)")
     eval_path = os.path.join(EVAL_FOLDER, f"evaluation_set{set_idx}.json")
+
     with open(eval_path, "r", encoding="utf-8") as f:
         eval_set = json.load(f)
 
@@ -112,29 +127,26 @@ for set_idx in range(9, 11):
         abstract = entry["abstract"]
         raw_venue = entry["actual_venue"]
 
-        #Dense retrieval
         query_emb = embedder.encode(abstract, normalize_embeddings=True).reshape(1, -1)
-        _, I = index.search(query_emb, 7)
-        top_7 = [metadata[i] for i in I[0]]
+        _, I = index.search(query_emb, 20)
+        candidates = [metadata[i] for i in I[0]]
+        top_7 = rerank_with_cross_encoder(abstract, candidates)
 
         context = "\n".join(
             f'- "{r["title"]}" published in {r["venue"] or "Unknown"}' for r in top_7
         )
 
-        #LLM prediction
-        response = safe_llm_invoke(rag_chain, {"abstract": abstract, "similar_papers": context}, context=f"abstract {idx + 1}")
+        response = safe_llm_invoke(rag_chain, {"abstract": abstract, "similar_papers": context}, context=f"abstract {idx+1}")
         if response is None:
             timeout_count += 1
             continue
 
         lines = [line.strip("-• ").strip() for line in response.split("\n") if line.strip()]
         preds = [line.split("(")[0].strip() if "(" in line else line for line in lines][:max(TOP_K)]
-        if not preds:
-            continue
 
+        rr = 0
         sims = match_venue_to_predictions(raw_venue, preds, SIM_THRESHOLD)
         paper_hits = {k: False for k in TOP_K}
-        rr = 0
 
         for i, (pred, sim) in enumerate(zip(preds, sims)):
             for k in TOP_K:
@@ -145,10 +157,10 @@ for set_idx in range(9, 11):
                 rr = 1 / (i + 1)
 
         if not any(paper_hits.values()):
-            transformed = safe_llm_invoke(expansion_chain, {"venue": raw_venue}, context=f"expansion {idx + 1}")
-            if transformed:
-                transformed = transformed.strip()
-                sims = match_venue_to_predictions(transformed, preds, SIM_THRESHOLD)
+            expanded = safe_llm_invoke(expansion_chain, {"venue": raw_venue}, context=f"expansion {idx+1}")
+            if expanded is not None:
+                expanded = expanded.strip()
+                sims = match_venue_to_predictions(expanded, preds, SIM_THRESHOLD)
                 for i, (pred, sim) in enumerate(zip(preds, sims)):
                     for k in TOP_K:
                         if i < k and not paper_hits[k] and sim >= SIM_THRESHOLD:
@@ -164,8 +176,7 @@ for set_idx in range(9, 11):
             sims = np.pad(sims, (0, 7 - len(sims)), constant_values=0)
         dcg = np.sum(sims / LOG_DISCOUNTS)
         idcg = np.sum(np.sort(sims)[::-1] / LOG_DISCOUNTS)
-        ndcg = dcg / idcg if idcg > 0 else 0
-        ndcgs.append(ndcg)
+        ndcgs.append(dcg / idcg if idcg > 0 else 0)
         total += 1
 
     #Saving results
@@ -182,7 +193,7 @@ for set_idx in range(9, 11):
     })
 
     with pd.ExcelWriter(EXCEL_OUTPUT, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
-        summary_df.to_excel(writer, sheet_name=f"No Rerank Set {set_idx}", index=False)
-        extra_metrics_df.to_excel(writer, sheet_name=f"No Rerank Set {set_idx} - Extra", index=False)
+        summary_df.to_excel(writer, sheet_name=f"MiniLM_v2 Set {set_idx}", index=False)
+        extra_metrics_df.to_excel(writer, sheet_name=f"MiniLM_v2 Set {set_idx} - Extra", index=False)
 
-    print(f"Finished Evaluation Set {set_idx}. Timeouts: {timeout_count}")
+    print(f"Finished Evaluation Set {set_idx} — Timeouts: {timeout_count}")

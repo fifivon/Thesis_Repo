@@ -100,7 +100,7 @@ def insert_embeddings_in_batches(data_gen, batch_size=2000):
             execute_values(cursor, insert_query, batch)
             conn.commit()
             count += len(batch)
-            tqdm.write(f"Inserted {count} embeddings...")
+            tqdm.write(f"Inserted {count} embeddings.")
             batch = []
     if batch:
         execute_values(cursor, insert_query, batch)
@@ -121,5 +121,5 @@ if __name__ == "__main__":
     print("Generating embeddings in batches...")
     embedding_gen = generate_embeddings_batched(matched_papers)
 
-    print("Inserting into PostgreSQL...")
+    print("Inserting into DB...")
     insert_embeddings_in_batches(embedding_gen, batch_size=2000)

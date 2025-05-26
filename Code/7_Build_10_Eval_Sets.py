@@ -18,7 +18,6 @@ NUM_SETS = 10
 SET_SIZE = 100
 
 #Load DB Data
-print("Connecting to database...")
 conn = psycopg2.connect(**DB_CONFIG)
 cur = conn.cursor()
 
@@ -55,7 +54,7 @@ for set_idx in range(NUM_SETS):
 conn.close()
 
 #Stream JSON and Extract Abstracts
-print("\nStreaming JSON to match abstracts...")
+print("\nStreaming json file to match abstracts...")
 
 all_needed_ids = set(pid for s in all_sets for pid in s)
 paper_abstract_map = {}
@@ -92,4 +91,4 @@ for i, paper_map in enumerate(all_sets, start=1):
     print(f"\nSet {i}: Saved {len(evaluation_set)} papers to {output_path}")
     print(f"Missing abstracts for {missing} papers in Set {i}.")
 
-print("\nAll evaluation sets are ready.")
+print("\nEvaluation sets are ready.")

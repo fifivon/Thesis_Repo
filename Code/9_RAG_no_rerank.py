@@ -15,11 +15,11 @@ EVAL_FOLDER = "C:/Users/effik/Desktop/THESIS/test_postgre/Data"
 FAISS_INDEX_PATH = "C:/Users/effik/Desktop/THESIS/test_postgre/Data/faiss_index.index"
 METADATA_PATH = "C:/Users/effik/Desktop/THESIS/test_postgre/Data/metadata.json"
 CANONICAL_EMB_PATH = "C:/Users/effik/Desktop/THESIS/test_postgre/Data/canonical_venue_embeddings.json"
-EXCEL_OUTPUT = "C:/Users/effik/Desktop/THESIS/test_postgre/Results/Res_RAG_citations_rerank.xlsx"
+EXCEL_OUTPUT = "C:/Users/effik/Desktop/THESIS/test_postgre/Results/Res_RAG_no_rerank.xlsx"
 MODEL_NAME = "thenlper/gte-small"
 TOP_K = [3, 5, 7]
 SIM_THRESHOLD = 0.92
-TIMEOUT = 120  # seconds
+TIMEOUT = 120
 
 
 embedder = SentenceTransformer(MODEL_NAME)
@@ -32,6 +32,7 @@ with open(METADATA_PATH, "r", encoding="utf-8") as f:
 with open(CANONICAL_EMB_PATH, "r", encoding="utf-8") as f:
     canonical_data = json.load(f)
 
+#Normalize canonical embeddings
 canonical_names = [x["name"] for x in canonical_data]
 canonical_embeddings = np.array([x["embedding"] for x in canonical_data], dtype=np.float32)
 canonical_embeddings = canonical_embeddings / np.linalg.norm(canonical_embeddings, axis=1, keepdims=True)
@@ -83,10 +84,6 @@ def safe_llm_invoke(chain, input_dict, timeout=TIMEOUT, context="unknown"):
             print(f"[{datetime.now()}] LLM exception on {context}: {e}")
             return None
 
-#Citation-based reranker
-def rerank_by_citation(candidate_entries, top_k=7):
-    return sorted(candidate_entries, key=lambda r: r.get("n_citation", 0), reverse=True)[:top_k]
-
 #Venue matcher
 def match_venue_to_predictions(venue_name, predictions, threshold):
     venue_vec = embedder.encode(venue_name, normalize_embeddings=True).reshape(1, -1)
@@ -97,9 +94,9 @@ def match_venue_to_predictions(venue_name, predictions, threshold):
         sims.append(sim)
     return sims
 
-#Main evaluation loop
-for set_idx in range(8, 11):
-    print(f"\n=== Starting Evaluation Set {set_idx} (Citation-Based Reranking) ===")
+#Evaluate sets
+for set_idx in range(1, 5):
+    print(f"\nStarting Evaluation Set {set_idx} (No Reranking)")
     eval_path = os.path.join(EVAL_FOLDER, f"evaluation_set{set_idx}.json")
     with open(eval_path, "r", encoding="utf-8") as f:
         eval_set = json.load(f)
@@ -115,15 +112,16 @@ for set_idx in range(8, 11):
         abstract = entry["abstract"]
         raw_venue = entry["actual_venue"]
 
+        #Dense retrieval
         query_emb = embedder.encode(abstract, normalize_embeddings=True).reshape(1, -1)
         _, I = index.search(query_emb, 20)
-        candidates = [metadata[i] for i in I[0]]
-        top_7 = rerank_by_citation(candidates)
+        top_7 = [metadata[i] for i in I[0]]
 
         context = "\n".join(
             f'- "{r["title"]}" published in {r["venue"] or "Unknown"}' for r in top_7
         )
 
+        #LLM prediction
         response = safe_llm_invoke(rag_chain, {"abstract": abstract, "similar_papers": context}, context=f"abstract {idx + 1}")
         if response is None:
             timeout_count += 1
@@ -184,7 +182,7 @@ for set_idx in range(8, 11):
     })
 
     with pd.ExcelWriter(EXCEL_OUTPUT, mode="a", engine="openpyxl", if_sheet_exists="replace") as writer:
-        summary_df.to_excel(writer, sheet_name=f"Rerank Citations Set {set_idx}", index=False)
-        extra_metrics_df.to_excel(writer, sheet_name=f"Rerank Citations Set {set_idx} - Extra", index=False)
+        summary_df.to_excel(writer, sheet_name=f"No Rerank Set {set_idx}", index=False)
+        extra_metrics_df.to_excel(writer, sheet_name=f"No Rerank Set {set_idx} - Extra", index=False)
 
     print(f"Finished Evaluation Set {set_idx}. Timeouts: {timeout_count}")

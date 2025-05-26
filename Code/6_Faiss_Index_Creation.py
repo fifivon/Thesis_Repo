@@ -34,7 +34,6 @@ with open(ABSTRACT_JSON_PATH, "r", encoding="utf-8") as f:
 print(f"Loaded {len(abstract_lookup)} abstracts.")
 
 #Connect to DB and retrieve embeddings
-print("🔌 Connecting to PostgreSQL...")
 conn = psycopg2.connect(**DB_CONFIG)
 cur = conn.cursor()
 
@@ -70,7 +69,7 @@ with tqdm(total=total_rows, desc="Processing Papers") as pbar:
             pbar.update(1)
             continue  #Skip corrupted
 
-        abstract = abstract_lookup.get(paper_id)  # May be None
+        abstract = abstract_lookup.get(paper_id)  # Could be None
         if abstract is None:
             pbar.update(1)
             continue  # Skip if no abstract
